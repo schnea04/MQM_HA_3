@@ -1,7 +1,7 @@
 ---
-title: "Fallstudie Textanalyse: <TITEL EINSETZEN>"
-subtitle: "MqM FS 2026 -- Eigene Fallstudie zu Textdaten"
-author: "Team: <Name 1>, <Name 2>, <Name 3>"
+title: "Fallstudie Textanalyse"
+subtitle: "MQM FS 2026 -- Eigene Fallstudie zu Textdaten"
+author: "Sarah Inderbitzin, Andri Schneider"
 date: "`r format(Sys.Date(), '%d.%m.%Y')`"
 output:
   pdf_document:
@@ -18,7 +18,7 @@ header-includes:
 
 ```{r setup, include=FALSE}
 # Code wird im Body ausgeblendet und am Ende gesammelt im Anhang gezeigt.
-# Zum Entwickeln: echo = TRUE setzen.
+# Zum Entwickeln: echo = T setzen.
 knitr::opts_chunk$set(
   echo = FALSE, warning = FALSE, message = FALSE,
   fig.align = "center", fig.width = 6, fig.height = 3.6, fig.pos = "H"
@@ -27,7 +27,7 @@ set.seed(42)  # Reproduzierbarkeit (vgl. Train/Test, word2vec, LDA)
 ```
 
 ```{r pakete}
-# --- Kern (laeuft auf dem Demo-Datensatz durch) ---
+# --- Kern (läuft auf dem Demo-Datensatz durch) ---
 library(tidyverse)   # dplyr, ggplot2, stringr, tidyr
 library(tidytext)    # unnest_tokens, bind_tf_idf, cast_dtm, tidy()
 library(tokenizers)  # tokenize_words / tokenize_ngrams (im Kurs verwendet)
@@ -36,7 +36,7 @@ library(SnowballC)   # wordStem(..., language="de")  -> Stemming
 library(naivebayes)  # naive_bayes()  -> Klassifikation auf BoW (Kurs-Beispiel)
 library(knitr)
 
-# --- Optional, je nach gewaehlter Methode (einkommentieren) ---
+# --- Optional, je nach gewählter Methode (einkommentieren) ---
 # library(topicmodels) # LDA (Woche 13)
 # library(textmineR)   # FitLdaModel + CalcProbCoherence (Kurs-Variante)
 # library(word2vec)    # word2vec(), doc2vec() (Woche 12)
@@ -49,14 +49,14 @@ library(knitr)
 > **Vorgaben (Folien W12, S.29):** Die Analyse soll *interpretierbar* sein, die
 > Resultate *kritisch diskutiert* und in eine *kleine Story* verpackt werden.
 > Als Vorbild dient die Vorlesungs-Fallstudie zu den TripAdvisor-Reviews des
-> Restaurants *Clouds* (Rating, Reviewtext, Sprache, Uebersetzung).
+> Restaurants *Clouds* (Rating, Reviewtext, Sprache, Übersetzung).
 
-Beschreibe in 1--2 Absaetzen:
+Beschreibe in 1--2 Absätzen:
 
-- **Datenquelle & Kontext:** Woher kommen die Texte (Reviews, Forenbeitraege,
+- **Datenquelle & Kontext:** Woher kommen die Texte (Reviews, Forenbeiträge,
   Support-Tickets, ...)? Wer hat sie wann geschrieben? Sprache(n)?
 - **Leitfrage:** z.B. *"Was unterscheidet positive von negativen Bewertungen?"*,
-  *"Welche Themen tauchen am haeufigsten auf?"* oder *"Koennen wir aus dem Text
+  *"Welche Themen tauchen am häufigsten auf?"* oder *"Können wir aus dem Text
   automatisch positiv/negativ ableiten?"* (vgl. Folien W12, S.3).
 - **Erwartung / Hypothese:** Was vermutet ihr -- und woran testet ihr es?
 
@@ -70,44 +70,44 @@ Beschreibe in 1--2 Absaetzen:
 # Erwartet: tibble mit  doc_id | text | (optional) rating
 #   z.B.  reviews <- read_csv("daten/reviews.csv")
 # Wichtig (W11, S.51): Daten anschauen, Rechtschreibfehler korrigieren,
-# Sprache pruefen (ggf. nur eine Sprache oder uebersetzen, W12 S.26).
+# Sprache prüfen (ggf. nur eine Sprache oder übersetzen, W12 S.26).
 # ============================================================
 
-# --- DEMO-Datensatz (nur damit die Vorlage durchlaeuft -> ERSETZEN) ---
+# --- DEMO-Datensatz (nur damit die Vorlage durchläuft -> ERSETZEN) ---
 reviews <- tibble(
   doc_id = 1:20,
   rating = c(5,5,4,3,2,1,5,2,3,5,4,1,5,2,4,1,4,2,5,1),
   text = c(
     "Hervorragendes Essen und sehr freundlicher Service, gerne wieder.",
     "Tolle Aussicht und leckere Gerichte, absolut empfehlenswert.",
-    "Schneller Service, gutes Preis-Leistungs-Verhaeltnis.",
+    "Schneller Service, gutes Preis-Leistungs-Verhältnis.",
     "Das Essen war okay, aber die Wartezeit war zu lang.",
     "Leider kalt serviert und unfreundliches Personal.",
-    "Sehr enttaeuschend, teuer und die Qualitaet mangelhaft.",
-    "Gemuetliches Ambiente, das Personal war zuvorkommend.",
-    "Die Portionen waren klein fuer den hohen Preis.",
+    "Sehr enttäuschend, teuer und die Qualität mangelhaft.",
+    "Gemütliches Ambiente, das Personal war zuvorkommend.",
+    "Die Portionen waren klein für den hohen Preis.",
     "Nicht schlecht, aber auch nichts Besonderes.",
     "Fantastischer Abend, das Dessert war ein Traum.",
     "Lange Wartezeit, das Essen dann aber sehr gut.",
     "Katastrophaler Service, wir warten immer noch auf die Rechnung.",
-    "Frische Zutaten und kreative Kueche, top.",
-    "Der Wein war ueberteuert und das Essen fade.",
+    "Frische Zutaten und kreative Küche, top.",
+    "Der Wein war überteuert und das Essen fade.",
     "Super Lage direkt am See, freundliches Team.",
     "Ganz toll, schon wieder eine halbe Stunde auf das Essen gewartet.",
     "Solides Mittagessen, nichts zu beanstanden.",
     "Das Lokal war laut und das Essen lauwarm.",
     "Aufmerksamer Service und ausgezeichnete Weinkarte.",
-    "Schlechte Erfahrung, wir kaemen nicht noch einmal."
+    "Schlechte Erfahrung, wir kämen nicht noch einmal."
   )
 )
 
-# Rating -> binaeres Label (Kurs-Konvention W12, S.27: 4-5 = positiv, 1-3 = negativ)
+# Rating -> binäres Label (Kurs-Konvention W12, S.27: 4-5 = positiv, 1-3 = negativ)
 reviews <- reviews |>
   mutate(label = factor(if_else(rating >= 4, "positiv", "negativ"),
                         levels = c("negativ", "positiv")))
 ```
 
-```{r daten-ueberblick}
+```{r daten-überblick}
 reviews |>
   summarise(
     n_texte           = n(),
@@ -117,21 +117,21 @@ reviews |>
   kable(digits = 2, caption = "Eckdaten des Korpus")
 ```
 
-Kurz beschreiben: Umfang, Klassenbalance, Textlaenge, Auffaelligkeiten.
+Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
 
 # Vorverarbeitung
 
 > Pipeline (W11, S.14): Rohtext -> Tokenisierung -> Normalisierung ->
 > Feature-Matrix -> Modell. Preprocessing ist Teil der Modellierungsentscheidung
-> (W11, S.38) -- jede Entscheidung kurz begruenden.
+> (W11, S.38) -- jede Entscheidung kurz begründen.
 
 ```{r tokenisierung}
-de_stop <- stopwords(source = "snowball", language = "de")  # 231 Woerter (W11, S.24)
+de_stop <- stopwords(source = "snowball", language = "de")  # 231 Wörter (W11, S.24)
 
 tokens <- reviews |>
   select(doc_id, label, text) |>
-  unnest_tokens(word, text, strip_numeric = TRUE) |>   # Tokenisierung, Zahlen raus
-  filter(!word %in% de_stop)                            # Stoppwoerter entfernen
+  unnest_tokens(word, text, strip_numeric = T) |>   # Tokenisierung, Zahlen raus
+  filter(!word %in% de_stop)                            # Stoppwörter entfernen
 
 # Stemming (W11, S.27-32). ACHTUNG: Stemming ODER Lemmatisierung ODER keins (W11, S.36).
 # Stemming kann Bedeutung verzerren (S.30/31) -> bewusst entscheiden.
@@ -142,25 +142,25 @@ tokens <- tokens |>
 #   ud_model <- udpipe_download_model("german-gsd"); ...
 ```
 
-Begruende: Stoppwortliste passend? Stemming sinnvoll oder verzerrend (z.B.
-unregelmaessige Verben, W11 S.31)? Seltene Woerter / Zahlen / Produktnamen
+Begründe: Stoppwortliste passend? Stemming sinnvoll oder verzerrend (z.B.
+unregelmässige Verben, W11 S.31)? Seltene Wörter / Zahlen / Produktnamen
 behalten oder entfernen (W11, S.36/38)?
 
 # Explorative Analyse
 
-## Worthaeufigkeiten
+## Worthäufigkeiten
 
-```{r haeufigkeiten, fig.cap="Haeufigste Stems im Korpus"}
-top_stems <- tokens |> count(stem, sort = TRUE) |> slice_head(n = 15)
+```{r häufigkeiten, fig.cap="Häufigste Stems im Korpus"}
+top_stems <- tokens |> count(stem, sort = T) |> slice_head(n = 15)
 
 ggplot(top_stems, aes(x = n, y = fct_reorder(stem, n))) +
   geom_col(fill = "steelblue") +
-  labs(x = "Haeufigkeit", y = NULL) +
+  labs(x = "Häufigkeit", y = NULL) +
   theme_minimal()
 
 # Optionale Wordcloud:
 # library(wordcloud)
-# fr <- tokens |> count(stem, sort = TRUE)
+# fr <- tokens |> count(stem, sort = T)
 # wordcloud(fr$stem, fr$n, min.freq = 1, max.words = 60,
 #           colors = RColorBrewer::brewer.pal(8, "Dark2"))
 ```
@@ -170,9 +170,9 @@ ggplot(top_stems, aes(x = n, y = fct_reorder(stem, n))) +
 ## Distinktive Begriffe je Klasse (TF-IDF)
 
 ```{r tfidf-klasse, fig.cap="Top TF-IDF Stems je Klasse", fig.height=4}
-# Hier dient die KLASSE als "Dokument", um charakteristische Woerter zu finden.
+# Hier dient die KLASSE als "Dokument", um charakteristische Wörter zu finden.
 tfidf_klasse <- tokens |>
-  count(label, stem, sort = TRUE) |>
+  count(label, stem, sort = T) |>
   bind_tf_idf(stem, label, n) |>
   group_by(label) |>
   slice_max(tf_idf, n = 8, with_ties = FALSE) |>
@@ -187,13 +187,13 @@ ggplot(tfidf_klasse,
   theme_minimal()
 ```
 
-*Interpretation:* Was sagen die distinktiven Woerter ueber die Gruppen aus?
+*Interpretation:* Was sagen die distinktiven Wörter über die Gruppen aus?
 
 # Methode 2 -- Klassifikation auf Basis von Text (Naive Bayes, W11 S.44)
 
 > **Methodisch zentral (W11, S.45):** Die Wortliste ist Teil des Trainings.
 > Wortliste und Rare-Word-Filter NUR auf den Trainingsdaten bestimmen und
-> unveraendert auf die Testdaten anwenden -- sonst fliesst Testinformation ein.
+> unverändert auf die Testdaten anwenden -- sonst fliesst Testinformation ein.
 
 ```{r split}
 n   <- nrow(reviews)
@@ -205,21 +205,21 @@ test  <- reviews[-idx, ]
 ```{r wortliste-train}
 # Wortliste NUR auf Trainingsdaten (W11, S.41): Stems mit n>1 (Demo-Schwelle)
 word_list <- train |>
-  unnest_tokens(word, text, strip_numeric = TRUE) |>
+  unnest_tokens(word, text, strip_numeric = T) |>
   filter(!word %in% de_stop) |>
   mutate(stem = wordStem(word, language = "de")) |>
-  count(stem, sort = TRUE) |>
+  count(stem, sort = T) |>
   filter(n > 1) |>
   pull(stem)
 ```
 
 ```{r bow-helper}
-# Baut die BoW-Feature-Matrix fuer ein beliebiges Subset mit FIXER word_list.
-# Garantiert, dass alle word_list-Spalten existieren (wichtig fuers Test-Set).
+# Baut die BoW-Feature-Matrix für ein beliebiges Subset mit FIXER word_list.
+# Garantiert, dass alle word_list-Spalten existieren (wichtig fürs Test-Set).
 build_features <- function(df, word_list) {
   feats <- df |>
     select(doc_id, text) |>
-    unnest_tokens(word, text, strip_numeric = TRUE) |>
+    unnest_tokens(word, text, strip_numeric = T) |>
     filter(!word %in% de_stop) |>
     mutate(stem = wordStem(word, language = "de")) |>
     filter(stem %in% word_list) |>
@@ -236,11 +236,11 @@ build_features <- function(df, word_list) {
     select(doc_id, label, all_of(word_list))
 }
 
-# Fuer Naive Bayes: nur ob ein Wort vorkommt (binaer, W11 S.44)
+# Für Naive Bayes: nur ob ein Wort vorkommt (binär, W11 S.44)
 to_binary <- function(feat_df, word_list) {
   feat_df |>
     mutate(across(all_of(word_list),
-                  ~ factor(.x > 0, levels = c(FALSE, TRUE),
+                  ~ factor(.x > 0, levels = c(FALSE, T),
                            labels = c("no", "yes"))))
 }
 ```
@@ -252,7 +252,7 @@ test_bin  <- to_binary(build_features(test,  word_list), word_list) |> select(-d
 nb   <- naive_bayes(label ~ ., data = train_bin, laplace = 1)
 pred <- predict(nb, newdata = test_bin |> select(-label))
 
-konfusion <- table(Vorhersage = pred, Tatsaechlich = test_bin$label)
+konfusion <- table(Vorhersage = pred, Tatsächlich = test_bin$label)
 accuracy  <- mean(pred == test_bin$label)
 ```
 
@@ -260,15 +260,15 @@ accuracy  <- mean(pred == test_bin$label)
 konfusion |> kable(caption = sprintf("Konfusionsmatrix Test (Accuracy = %.2f)", accuracy))
 ```
 
-> Hinweis: Auf dem winzigen Demo-Datensatz sind diese Zahlen NICHT aussagekraeftig.
+> Hinweis: Auf dem winzigen Demo-Datensatz sind diese Zahlen NICHT aussagekräftig.
 > Mit eurem echten Korpus (>=200 Texte) und ggf. Cross-Validation wird das robust.
 > Evaluationsmasse je nach Fragestellung: Accuracy, AUC, LogLoss (vgl. W13, S.6).
 
 # Methode 3 -- Sentimentanalyse mit Wortlisten (W12 S.22-24)
 
-> Idee: positive Woerter +, negative Woerter -, pro Text summieren. Fuer Englisch
-> `get_sentiments("afinn"/"bing")`; fuer **Deutsch** SentiWS oder eigene Liste
-> (W12, S.23). Eine Wortliste ist nie neutral -- sie muss zu Sprache, Domaene und
+> Idee: positive Wörter +, negative Wörter -, pro Text summieren. Für Englisch
+> `get_sentiments("afinn"/"bing")`; für **Deutsch** SentiWS oder eigene Liste
+> (W12, S.23). Eine Wortliste ist nie neutral -- sie muss zu Sprache, Domäne und
 > Fragestellung passen.
 
 ```{r sentiment-lexikon}
@@ -279,13 +279,13 @@ konfusion |> kable(caption = sprintf("Konfusionsmatrix Test (Accuracy = %.2f)", 
 #   mutate(word = str_to_lower(str_remove(wort_pos, "\\|.*"))) |>
 #   select(word, value)
 
-# --- Mini-Seed-Lexikon (PLATZHALTER, damit die Vorlage laeuft) ---
+# --- Mini-Seed-Lexikon (PLATZHALTER, damit die Vorlage läuft) ---
 senti_lex <- tibble(
   word = c("hervorragend","freundlich","tolle","leckere","empfehlenswert","gut","gerne",
-           "gemuetlich","zuvorkommend","fantastisch","traum","frische","kreative","top",
+           "gemütlich","zuvorkommend","fantastisch","traum","frische","kreative","top",
            "super","freundliches","aufmerksamer","ausgezeichnete","solides",
-           "enttaeuschend","teuer","mangelhaft","kalt","unfreundliches","klein","hohen",
-           "katastrophaler","ueberteuert","fade","laut","lauwarm","schlechte","schlecht","lang"),
+           "enttäuschend","teuer","mangelhaft","kalt","unfreundliches","klein","hohen",
+           "katastrophaler","überteuert","fade","laut","lauwarm","schlechte","schlecht","lang"),
   value = c(rep(1, 19), rep(-1, 15))
 )
 
@@ -305,52 +305,52 @@ sentiment_scores |>
   theme_minimal()
 ```
 
-*Interpretation:* Trennt das Sentiment die Klassen? Schau dir Fehlfaelle an --
+*Interpretation:* Trennt das Sentiment die Klassen? Schau dir Fehlfälle an --
 Negation ("nicht schlecht"), Ironie ("Ganz toll, schon wieder gewartet"),
-kontextabhaengige Woerter ("teuer"). Genau das gehoert in die Diskussion (W12, S.22).
+kontextabhängige Wörter ("teuer"). Genau das gehört in die Diskussion (W12, S.22).
 
 # Optionale Methoden (Skelette -- aktivieren bei Bedarf)
 
 ## word2vec (W12, S.8-14) {-}
 
-```{r word2vec, eval=FALSE, echo=TRUE}
+```{r word2vec, eval=FALSE, echo=T}
 library(word2vec)
 set.seed(42)
 # Auf vorverarbeitetem Text trainieren (eine Zeichenkette pro Dokument):
 w2v <- word2vec(x = train$text, type = "cbow", dim = 50,
                 window = 5, iter = 20, min_count = 5)
 
-# aehnliche Woerter explorieren:
+# ähnliche Wörter explorieren:
 predict(w2v, c("service", "preis", "essen"), type = "nearest", top_n = 5)
 
-# Dokumentvektor = Mittelwert der Wortvektoren (W12, S.14) -> Feature fuer ML:
+# Dokumentvektor = Mittelwert der Wortvektoren (W12, S.14) -> Feature für ML:
 doc_vec <- doc2vec(w2v, newdata = reviews$text)
 # vortrainiertes Modell laden statt selbst trainieren:
-# model_de <- read.word2vec("model.bin", normalize = TRUE)
+# model_de <- read.word2vec("model.bin", normalize = T)
 ```
 
 ## SBERT / Satz-Embeddings (W12, S.18; Python via reticulate) {-}
 
-```{r sbert, eval=FALSE, echo=TRUE}
+```{r sbert, eval=FALSE, echo=T}
 library(reticulate)
 st    <- import("sentence_transformers")
 model <- st$SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 emb   <- model$encode(reviews$text)          # ein dichter Vektor pro Review
-# emb anschliessend als Feature-Matrix: Klassifikation, Clustering, Aehnlichkeitssuche.
+# emb anschliessend als Feature-Matrix: Klassifikation, Clustering, Ähnlichkeitssuche.
 ```
 
 ## Topic Modeling -- LDA (W13) {-}
 
-```{r lda, eval=FALSE, echo=TRUE}
+```{r lda, eval=FALSE, echo=T}
 library(topicmodels)
 dtm <- reviews |>
-  unnest_tokens(word, text, strip_numeric = TRUE) |>
+  unnest_tokens(word, text, strip_numeric = T) |>
   filter(!word %in% de_stop) |>
   mutate(stem = wordStem(word, language = "de")) |>
   count(doc_id, stem) |>
   cast_dtm(doc_id, stem, n)
 
-k   <- 4   # Anzahl Topics: ueber Interpretierbarkeit + Coherence waehlen (W13, S.19/20)
+k   <- 4   # Anzahl Topics: über Interpretierbarkeit + Coherence wählen (W13, S.19/20)
 lda <- LDA(dtm, k = k, method = "Gibbs",
            control = list(seed = 42, alpha = 0.1, delta = 0.05))  # Defaults W13, S.18
 
@@ -365,19 +365,19 @@ tidy(lda, "gamma")                                                # Dokument-Top
 
 ## LLM-Klassifikation (W12, S.19) {-}
 
-```{r llm, eval=FALSE, echo=TRUE}
-# Prompt-basiert, z.B. ueber eine LLM-API. Pseudostruktur:
+```{r llm, eval=FALSE, echo=T}
+# Prompt-basiert, z.B. über eine LLM-API. Pseudostruktur:
 # prompt <- "Klassifiziere das folgende Review als positiv, neutral oder negativ.
 #            Antworte nur mit einem Wort. Review: {text}"
-# Rolle laut Folien: Sanity Check / Labeling-Hilfe / qualitative Ergaenzung.
-# Beachten: Kosten, Datenschutz, Variabilitaet -> systematische Evaluation noetig.
+# Rolle laut Folien: Sanity Check / Labeling-Hilfe / qualitative Ergänzung.
+# Beachten: Kosten, Datenschutz, Variabilität -> systematische Evaluation nötig.
 ```
 
 # Interpretation der wichtigsten Ergebnisse
 
 Zentrale Befunde mit Bezug zur Leitfrage. Pro Befund: *Was* gefunden, *wie
 sicher*, *was bedeutet* es im Kontext? (W13, S.27: nicht die Modelle sind das
-Ziel, sondern was wir ueber die Texte lernen.)
+Ziel, sondern was wir über die Texte lernen.)
 
 # Kritische Diskussion
 
@@ -386,25 +386,25 @@ Ziel, sondern was wir ueber die Texte lernen.)
 Mindestens ansprechen (Folienbezug):
 
 - **Grenzen BoW/TF-IDF (W12, S.5):** ignorieren Wortreihenfolge, Kontext,
-  Mehrdeutigkeit, semantische Aehnlichkeit ("nicht schlecht" vs. "schlecht").
-- **Sentiment-Wortlisten (W12, S.22):** Negation, Ironie, kontextabhaengige
-  Woerter, domaenenspezifische Begriffe; Liste ist nie neutral.
+  Mehrdeutigkeit, semantische Ähnlichkeit ("nicht schlecht" vs. "schlecht").
+- **Sentiment-Wortlisten (W12, S.22):** Negation, Ironie, kontextabhängige
+  Wörter, domänenspezifische Begriffe; Liste ist nie neutral.
 - **Preprocessing (W11, S.38):** Stemming kann Bedeutung verzerren; seltene
-  Woerter koennen Rauschen oder wichtige Hinweise sein.
+  Wörter können Rauschen oder wichtige Hinweise sein.
 - **Daten & Bias (W11, S.25):** Korpus-Verzerrung, Selektionsbias bei Reviews,
-  Rechtschreibfehler (W11, S.51), Sprache/Uebersetzung (W12, S.26).
+  Rechtschreibfehler (W11, S.51), Sprache/Übersetzung (W12, S.26).
 - **Methodische Sauberkeit (W11, S.45):** Wortliste nur auf Trainingsdaten.
 - **Topic Modeling (W13, S.21):** explorativ, kein Wahrheitsgenerator; k-Wahl
-  und Coherence ersetzen keine inhaltliche Pruefung.
+  und Coherence ersetzen keine inhaltliche Prüfung.
 
 # Fazit
 
-Kurzer Schluss (3--5 Saetze): Antwort auf die Leitfrage + was ihr mit mehr
-Zeit/Daten anders machen wuerdet.
+Kurzer Schluss (3--5 Sätze): Antwort auf die Leitfrage + was ihr mit mehr
+Zeit/Daten anders machen würdet.
 
 \newpage
 
 # Anhang: Code
 
-```{r anhang, ref.label = setdiff(knitr::all_labels(), c("setup", "anhang")), echo=TRUE, eval=FALSE}
+```{r anhang, ref.label = setdiff(knitr::all_labels(), c("setup", "anhang")), echo=T, eval=FALSE}
 ```
