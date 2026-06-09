@@ -71,32 +71,44 @@ Genau hier setzt unsere Analyse an. Eine einzelne Sternebewertung sagt zwar, ob 
 # ============================================================
 
 # --- Datensatz: UBS-Twint App
-reviews <- read.csv("twint_reviews.csv")
+reviews <- read.csv("twint_reviews_de.csv")
 # names(reviews) 
-# "doc_id", "app", "text", "rating", "date", "thumbsUpCount", "reviewCreatedVersion"
-reviews <- reviews |> select(doc_id, text, rating, date)
-head(reviews)
-
+# "doc_id", "app", "text", "rating", "date", "thumbsUpCount", "reviewCreatedVersion", "lang", "text_de"
 
 # Rating -> binäres Label
 reviews <- reviews |>
   mutate(label = factor(if_else(rating >= 4, "positiv", "negativ"),
                         levels = c("negativ", "positiv")))
+
 ```
 
-```{r daten-überblick}
-reviews |>
-  summarise(
-    n_texte           = n(),
-    leere_texte       = sum(is.na(text) | str_trim(text) == ""),
-    anteil_positiv    = mean(label == "positiv"),
-    woerter_im_mittel = mean(str_count(text, "\\w+"))
-  ) |>
-  kable(digits = 2, caption = "Eckdaten des Korpus")
+
+
+```{r daten-ueberblick}
+
+cat("Anzahl Texte:       ", nrow(reviews), "\n")
+cat("Leere Texte:        ", sum(is.na(reviews$text) | str_trim(reviews$text) == ""), "\n")
+cat("Anteil positiv:     ", round(mean(reviews$label == "positiv"), 2), "\n")
+cat("Woerter im Mittel:  ", round(mean(str_count(reviews$text, "\\w+"), na.rm = TRUE), 2), "\n\n")
+
+cat("Sprachen:")
+print(table(reviews$lang, useNA = "ifany"))
+
+# Verteilung Reviews
+ggplot(reviews, aes(factor(rating))) +
+  geom_bar(fill = "steelblue") +
+  labs(x = "Sterne", y = "Anzahl") + theme_minimal()
+
 ```
 
 Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
 
+Der Datensatz umfasst 1'781 Reviews, keine davon leer. Die Reviews sind mit durchschnittlich 17 Wörtern kurz, was für App-Bewertungen typisch ist.
+
+Die Label sind folgendermassen Verteilt: 67 % positiv (4–5 Sterne), 33 % negativ (1-3 Sterne). Wie an der Sterneverteilung sichtbar, ist das polarisiert mit einem dominanten Gipfel bei 5, einem zweiten, kleineren bei 1 und ausgedünnter Mitte. Mehrheitlich positiv, aber mit genug negativem Material (rund ein Drittel), um Muster hinter schlechten Bewertungen herauszuarbeiten. Für die Klassifikation ist 67/33 eine angenehme Balance.
+
+Circa 90% der Reviews wurden als Deutsch erkannt. Bei der Übersetzung wurde vom Google-Translator Englisch (x31), Französisch (x3) und Italienisch (x3) korrekt erkannt und ins deutsche übersetzt. Die restlichen erkannten Sprachen (Niederländisch, Dänisch, Französisch, Schwedisch, Norwegisch und Afrikaans) sind bei genauerer Betrachtung falsch klassifiziert, da diese bereits im Original Deutsch waren; sie wurden trotzdem "übersetzt". Zudem konnten einige Texte nicht erkannt werden (NaN). Diese waren entweder Hochdeutsch mit Schreibfehlern oder verhältnismässig vielen englischen Begriffen oder auf Schweizerdeutsch verfasst.
+Folgend werden nur noch die originalen oder auf Deutsch übersetzten Texte verwendet. Aufgrund der geringen Anzahl der Schweizerdeutschen Texte werden diese nicht als entscheidend betrachtet und deswegen nicht noch separat übersetzt.
 
 
 # Vorverarbeitung
@@ -104,6 +116,15 @@ Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
 > Pipeline (W11, S.14): Rohtext -> Tokenisierung -> Normalisierung ->
 > Feature-Matrix -> Modell. Preprocessing ist Teil der Modellierungsentscheidung
 > (W11, S.38) -- jede Entscheidung kurz begründen.
+
+```{r daten-konvertieren}
+
+reviews <- reviews |> select(doc_id, text = text_de, rating, label, date)
+head(reviews)
+
+
+```
+
 
 ```{r tokenisierung}
 de_stop <- stopwords(source = "snowball", language = "de")
