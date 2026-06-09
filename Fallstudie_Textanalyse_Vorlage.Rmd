@@ -35,6 +35,7 @@ library(stopwords)   # stopwords(source="snowball", language="de")
 library(SnowballC)   # wordStem(..., language="de")  -> Stemming
 library(naivebayes)  # naive_bayes()  -> Klassifikation auf BoW (Kurs-Beispiel)
 library(knitr)
+library(dplyr)
 
 # --- Optional, je nach gewählter Methode (einkommentieren) ---
 # library(topicmodels) # LDA (Woche 13)
@@ -46,24 +47,20 @@ library(knitr)
 
 # Ausgangslage und Story
 
-> **Vorgaben (Folien W12, S.29):** Die Analyse soll *interpretierbar* sein, die
+> Die Analyse soll *interpretierbar* sein, die
 > Resultate *kritisch diskutiert* und in eine *kleine Story* verpackt werden.
 > Als Vorbild dient die Vorlesungs-Fallstudie zu den TripAdvisor-Reviews des
 > Restaurants *Clouds* (Rating, Reviewtext, Sprache, Übersetzung).
 
-Beschreibe in 1--2 Absätzen:
 
-- **Datenquelle & Kontext:** Woher kommen die Texte (Reviews, Forenbeiträge,
-  Support-Tickets, ...)? Wer hat sie wann geschrieben? Sprache(n)?
-- **Leitfrage:** z.B. *"Was unterscheidet positive von negativen Bewertungen?"*,
-  *"Welche Themen tauchen am häufigsten auf?"* oder *"Können wir aus dem Text
-  automatisch positiv/negativ ableiten?"* (vgl. Folien W12, S.3).
-- **Erwartung / Hypothese:** Was vermutet ihr -- und woran testet ihr es?
+Wir geniessen als Gesellschaft heute viele Services, die den Alltag bequemer gestalten. Die Möglichkeiten die Smartphones, welches ein Grossteil der Leute immer bei sich trägt, für solche Services bieten sind sehr breit gefächert. Vom Geniessen verschiedenster Musik per Knopfdruck, über die Konnektivität mit Familie, Freunden, Arbeit und gefühlt dem Rest der Welt, bis hin zum Ersatz des Portemonnaies durch Digital-Wallet-Möglichkeiten von beispielsweise ID, Krankenkassenkarte und auch Zahlungsmöglichkeiten ist alles in dem unscheinbaren Natel enthalten. Ob das wirklich so toll ist und nur Positiven birgt, müssen alle für sich selbst bestimmen. Deswegen können digitale Zahlungsmittel wie TWINT Fluch und Segen zugleich sein. TWINT ist seit dessen Einführung für viele im Alltag zur Normalität geworden; Ultra praktisch muss kein Bargeld und keine EC-Karte zum einzukaufen mitgenommen werden und es kann auch mal spontan irgendwo etwas gekauft werden. Steht man aber an der Kasse und hat keinen Strom, kein Netz oder die App selbst hat ein Problem ist das dann doch ziemlich ungünstig.
+
+Somit ist das Potenzial für verärgerte Kundschaft nicht klein, welche dann teilweise auch ein Ventil für ihren Frust sucht. Dieses Ventil kann eine Rezension sein. Somit sind in den Rezensionen der Apps immer wieder geladene Texte der Kundschaft zu finden, bei der die App "im dümmsten Moment" nicht funktioniert. Auch wenn die App an sich grösstenteils sehr gut funktioniert und das auch in den Rezensionen zu lesen ist, sind genau solche Aussetzer wichtig zu erkennen. 
+
+Genau hier setzt unsere Analyse an. Eine einzelne Sternebewertung sagt zwar, ob jemand zufrieden war, aber nicht, warum. Wir fragen deshalb: Lassen sich aus den Texten der TWINT-Rezensionen systematisch jene Themen herauslesen, die hinter negativen Bewertungen stehen und unterscheiden sich diese sprachlich klar von den positiven? Wir erwarten erstens eine insgesamt eher positive bis polarisierte Bewertungsverteilung, wie sie für etablierte Alltags-Apps typisch ist. Zweitens vermuten wir, dass sich negative Reviews weniger auf die Idee der App als auf konkrete Ausfälle beziehen; Begriffe rund um Login, Verbindung, Updates oder Zahlungsabbrüche dürften in den schlecht bewerteten Texten überdurchschnittlich häufig auftauchen. Ob sich diese Erwartung bestätigt und ob ein einfaches, interpretierbares Modell positive von negativen Reviews allein anhand des Textes trennen kann, prüfen wir im Folgenden.
+
 
 # Daten
-
-> **Anforderung (W12, S.28):** Korpus mind. 200--300 Texte.
-
 ```{r daten-laden}
 # ============================================================
 # TODO: Eure echten Daten laden und das Demo-Beispiel ersetzen.
@@ -73,35 +70,15 @@ Beschreibe in 1--2 Absätzen:
 # Sprache prüfen (ggf. nur eine Sprache oder übersetzen, W12 S.26).
 # ============================================================
 
-# --- DEMO-Datensatz (nur damit die Vorlage durchläuft -> ERSETZEN) ---
-reviews <- tibble(
-  doc_id = 1:20,
-  rating = c(5,5,4,3,2,1,5,2,3,5,4,1,5,2,4,1,4,2,5,1),
-  text = c(
-    "Hervorragendes Essen und sehr freundlicher Service, gerne wieder.",
-    "Tolle Aussicht und leckere Gerichte, absolut empfehlenswert.",
-    "Schneller Service, gutes Preis-Leistungs-Verhältnis.",
-    "Das Essen war okay, aber die Wartezeit war zu lang.",
-    "Leider kalt serviert und unfreundliches Personal.",
-    "Sehr enttäuschend, teuer und die Qualität mangelhaft.",
-    "Gemütliches Ambiente, das Personal war zuvorkommend.",
-    "Die Portionen waren klein für den hohen Preis.",
-    "Nicht schlecht, aber auch nichts Besonderes.",
-    "Fantastischer Abend, das Dessert war ein Traum.",
-    "Lange Wartezeit, das Essen dann aber sehr gut.",
-    "Katastrophaler Service, wir warten immer noch auf die Rechnung.",
-    "Frische Zutaten und kreative Küche, top.",
-    "Der Wein war überteuert und das Essen fade.",
-    "Super Lage direkt am See, freundliches Team.",
-    "Ganz toll, schon wieder eine halbe Stunde auf das Essen gewartet.",
-    "Solides Mittagessen, nichts zu beanstanden.",
-    "Das Lokal war laut und das Essen lauwarm.",
-    "Aufmerksamer Service und ausgezeichnete Weinkarte.",
-    "Schlechte Erfahrung, wir kämen nicht noch einmal."
-  )
-)
+# --- Datensatz: UBS-Twint App
+reviews <- read.csv("twint_reviews.csv")
+# names(reviews) 
+# "doc_id", "app", "text", "rating", "date", "thumbsUpCount", "reviewCreatedVersion"
+reviews <- reviews |> select(doc_id, text, rating, date)
+head(reviews)
 
-# Rating -> binäres Label (Kurs-Konvention W12, S.27: 4-5 = positiv, 1-3 = negativ)
+
+# Rating -> binäres Label
 reviews <- reviews |>
   mutate(label = factor(if_else(rating >= 4, "positiv", "negativ"),
                         levels = c("negativ", "positiv")))
@@ -111,6 +88,7 @@ reviews <- reviews |>
 reviews |>
   summarise(
     n_texte           = n(),
+    leere_texte       = sum(is.na(text) | str_trim(text) == ""),
     anteil_positiv    = mean(label == "positiv"),
     woerter_im_mittel = mean(str_count(text, "\\w+"))
   ) |>
@@ -119,6 +97,8 @@ reviews |>
 
 Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
 
+
+
 # Vorverarbeitung
 
 > Pipeline (W11, S.14): Rohtext -> Tokenisierung -> Normalisierung ->
@@ -126,15 +106,15 @@ Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
 > (W11, S.38) -- jede Entscheidung kurz begründen.
 
 ```{r tokenisierung}
-de_stop <- stopwords(source = "snowball", language = "de")  # 231 Wörter (W11, S.24)
+de_stop <- stopwords(source = "snowball", language = "de")
 
 tokens <- reviews |>
   select(doc_id, label, text) |>
   unnest_tokens(word, text, strip_numeric = T) |>   # Tokenisierung, Zahlen raus
-  filter(!word %in% de_stop)                            # Stoppwörter entfernen
+  filter(!word %in% de_stop)                        # Stoppwörter entfernen
 
-# Stemming (W11, S.27-32). ACHTUNG: Stemming ODER Lemmatisierung ODER keins (W11, S.36).
-# Stemming kann Bedeutung verzerren (S.30/31) -> bewusst entscheiden.
+# Stemming. ACHTUNG: Stemming ODER Lemmatisierung ODER keins
+# Stemming kann Bedeutung verzerren -> bewusst entscheiden.
 tokens <- tokens |>
   mutate(stem = wordStem(word, language = "de"))
 
