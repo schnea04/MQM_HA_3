@@ -36,13 +36,7 @@ library(SnowballC)   # wordStem(..., language="de")  -> Stemming
 library(naivebayes)  # naive_bayes()  -> Klassifikation auf BoW (Kurs-Beispiel)
 library(knitr)
 library(dplyr)
-
-# --- Optional, je nach gewählter Methode (einkommentieren) ---
-# library(topicmodels) # LDA (Woche 13)
-# library(textmineR)   # FitLdaModel + CalcProbCoherence (Kurs-Variante)
-# library(word2vec)    # word2vec(), doc2vec() (Woche 12)
-# library(reticulate)  # SBERT via Python sentence-transformers
-# library(wordcloud)   # optionale Wordcloud
+library(udpipe)
 ```
 
 # Ausgangslage und Story
@@ -101,13 +95,12 @@ ggplot(reviews, aes(factor(rating))) +
 
 ```
 
-Kurz beschreiben: Umfang, Klassenbalance, Textlänge, Auffälligkeiten.
-
 Der Datensatz umfasst 1'781 Reviews, keine davon leer. Die Reviews sind mit durchschnittlich 17 Wörtern kurz, was für App-Bewertungen typisch ist.
 
 Die Label sind folgendermassen Verteilt: 67 % positiv (4–5 Sterne), 33 % negativ (1-3 Sterne). Wie an der Sterneverteilung sichtbar, ist das polarisiert mit einem dominanten Gipfel bei 5, einem zweiten, kleineren bei 1 und ausgedünnter Mitte. Mehrheitlich positiv, aber mit genug negativem Material (rund ein Drittel), um Muster hinter schlechten Bewertungen herauszuarbeiten. Für die Klassifikation ist 67/33 eine angenehme Balance.
 
 Circa 90% der Reviews wurden als Deutsch erkannt. Bei der Übersetzung wurde vom Google-Translator Englisch (x31), Französisch (x3) und Italienisch (x3) korrekt erkannt und ins deutsche übersetzt. Die restlichen erkannten Sprachen (Niederländisch, Dänisch, Französisch, Schwedisch, Norwegisch und Afrikaans) sind bei genauerer Betrachtung falsch klassifiziert, da diese bereits im Original Deutsch waren; sie wurden trotzdem "übersetzt". Zudem konnten einige Texte nicht erkannt werden (NaN). Diese waren entweder Hochdeutsch mit Schreibfehlern oder verhältnismässig vielen englischen Begriffen oder auf Schweizerdeutsch verfasst.
+
 Folgend werden nur noch die originalen oder auf Deutsch übersetzten Texte verwendet. Aufgrund der geringen Anzahl der Schweizerdeutschen Texte werden diese nicht als entscheidend betrachtet und deswegen nicht noch separat übersetzt.
 
 
@@ -122,41 +115,88 @@ Folgend werden nur noch die originalen oder auf Deutsch übersetzten Texte verwe
 reviews <- reviews |> select(doc_id, text = text_de, rating, label, date)
 head(reviews)
 
-
 ```
 
 
-```{r tokenisierung}
+```{r tokenisierung, cache=TRUE}
 de_stop <- stopwords(source = "snowball", language = "de")
 
-tokens <- reviews |>
-  select(doc_id, label, text) |>
-  unnest_tokens(word, text, strip_numeric = T) |>   # Tokenisierung, Zahlen raus
-  filter(!word %in% de_stop)                        # Stoppwörter entfernen
+# --- udpipe-Modell laden (einmalig herunterladen) ------------------------
+# Der Download legt eine .udpipe-Datei im Projektordner ab. Danach wird nur
+# noch geladen -> beim Knitten nicht jedes Mal neu herunterladen.
+ud_files <- list.files(pattern = "german-gsd.*\\.udpipe$")
+if (length(ud_files) == 0) {
+  model_file <- udpipe_download_model(language = "german-gsd")$file_model
+} else {
+  model_file <- ud_files[1]
+}
+ud_model <- udpipe_load_model(model_file)
 
-# Stemming. ACHTUNG: Stemming ODER Lemmatisierung ODER keins
-# Stemming kann Bedeutung verzerren -> bewusst entscheiden.
-tokens <- tokens |>
-  mutate(stem = wordStem(word, language = "de"))
+# --- Annotation: Tokenisierung + POS + Lemma in einem Schritt ------------
+# parser = "none": kein Dependency-Parsing nötig -> deutlich schneller.
+anno <- udpipe_annotate(
+  ud_model,
+  x      = reviews$text,
+  doc_id = as.character(reviews$doc_id),
+  parser = "none"
+) |>
+  as.data.frame()
 
-# Alternative Lemmatisierung statt Stemming (W11, S.34, Paket udpipe):
-#   ud_model <- udpipe_download_model("german-gsd"); ...
+# --- Tokens aufbereiten ---------------------------------------------------
+tokens <- anno |>
+  filter(!upos %in% c("PUNCT", "SYM", "NUM", "X")) |>     # Satzzeichen/Zahlen/Symbole raus
+  # Optional (einkommentieren): nur Inhaltswörter behalten ->
+  # lesbarere TF-IDF-Begriffe und Topics:
+  # filter(upos %in% c("NOUN", "PROPN", "VERB", "ADJ", "ADV")) |>
+  mutate(
+    word  = str_to_lower(token),
+    lemma = str_to_lower(coalesce(lemma, token))          # fehlendes Lemma -> Token
+  ) |>
+  filter(!lemma %in% de_stop) |>                          # Stoppwörter auf Lemma-Ebene
+  filter(str_detect(lemma, "[a-zäöüß]")) |>               # nur Lemmas mit Buchstaben
+  left_join(reviews |> transmute(doc_id = as.character(doc_id), label),
+            by = "doc_id") |>
+  select(doc_id, label, word, lemma)
+
 ```
 
 Begründe: Stoppwortliste passend? Stemming sinnvoll oder verzerrend (z.B.
-unregelmässige Verben, W11 S.31)? Seltene Wörter / Zahlen / Produktnamen
-behalten oder entfernen (W11, S.36/38)?
+unregelmässige Verben, W11 S.31)? Seltene Wörter / Zahlen / Produktnamen behalten oder entfernen (W11, S.36/38)?
+
+
+Wir normalisieren die Tokens mit Lemmatisierung statt Stemming, da die deutsche Sprache bekannterweise komplex ist. Der Snowball-Stemmer schneidet Endungen rein regelbasiert ab und scheitert an unregelmässigen Verben (ging/gegangen werden nicht zu gehen) sowie an Umlautwechseln, und er erzeugt häufig unwirkliche Worte, die teilweise nicht zu verstehen sind. Da unsere Analyse explizit interpretierbar sein soll und die distinktiven Begriffe (TF-IDF) wie auch die späteren Topics lesbar bleiben müssen, führen wir die Wörter mit `udpipe` und dem Modell `german-gsd` auf ihre echte Grundform (Lemma) zurück. `udpipe` übernimmt dabei Tokenisierung, Wortarterkennung (POS) und Lemmatisierung in einem Schritt, weshalb die separate Tokenisierung über `unnest_tokens` entfällt.
+
+Satzzeichen, Symbole und Zahlen entfernen wir über die Wortart (`upos`) statt über eine Zeichenregel; das ist präziser als `strip_numeric`. Zahlen tragen in App-Reviews kaum inhaltliche Bedeutung (Sternangaben, Datums- und Versionsnummern) und fallen deshalb weg. Die Stoppwörter entfernen wir bewusst auf der Lemma-Ebene mit der Snowball-Liste für Deutsch: Da flektierte Funktionswörter wie ist, war oder sind alle auf das Lemma sein zurückgeführt werden, greift die Liste auf der Grundform zuverlässiger als auf der Oberflächenform. Dies ist ein konkreter Vorteil der Lemmatisierung. Findet `udpipe` für ein Token kein Lemma (etwa bei Tippfehlern, englischen Begriffen oder Schweizerdeutsch), behalten wir die Oberflächenform, damit kein Token verloren geht.
+
+Produktnamen wie TWINT, UBS oder App behalten wir bewusst, da sie für die Domäne zentral sind und in der Leitfrage eine Rolle spielen. Eine Filterung seltener Wörter nehmen wir an dieser Stelle nicht global vor: Sie erfolgt erst beim Aufbau der Feature-Matrix und ausschliesslich auf den Trainingsdaten, damit keine Testinformation einfliesst.
+
 
 # Explorative Analyse
 
 ## Worthäufigkeiten
 
 ```{r häufigkeiten, fig.cap="Häufigste Stems im Korpus"}
-top_stems <- tokens |> count(stem, sort = T) |> slice_head(n = 15)
+# Top 15 Lemmas nach GESAMThäufigkeit bestimmen (wie bisher)
+top_n_lemma <- tokens |>
+  count(lemma, sort = TRUE) |>
+  slice_head(n = 15)
 
-ggplot(top_stems, aes(x = n, y = fct_reorder(stem, n))) +
-  geom_col(fill = "steelblue") +
-  labs(x = "Häufigkeit", y = NULL) +
+# Häufigkeiten je Lemma UND Label, nur für diese Top-15
+top_lemma <- tokens |>
+  filter(lemma %in% top_n_lemma$lemma) |>
+  count(lemma, label) |>
+  mutate(label = factor(label, levels = c("positiv", "negativ"))) |>
+  group_by(lemma) |>
+  mutate(pct = n / sum(n)) |>           # Anteil innerhalb des Balkens
+  ungroup()
+
+ggplot(top_lemma, aes(x = n, y = fct_reorder(lemma, n, .fun = sum), fill = label)) +
+  geom_col(position = position_stack(reverse = TRUE)) +
+  geom_text(aes(label = scales::percent(pct, accuracy = 1)),
+            position = position_stack(vjust = 0.5, reverse = TRUE),
+            color = "white", size = 3) +
+  scale_fill_manual(values = c(positiv = "steelblue", negativ = "darkorange")) +
+  labs(x = "Häufigkeit", y = NULL, fill = "Label") +
   theme_minimal()
 
 # Optionale Wordcloud:
@@ -166,6 +206,8 @@ ggplot(top_stems, aes(x = n, y = fct_reorder(stem, n))) +
 #           colors = RColorBrewer::brewer.pal(8, "Dark2"))
 ```
 
+Die häufigsten Lemmas bestätigen die erwartete Trennung bereits explorativ. Bedienbarkeitsbegriffe wie `einfach`, `schnell`, `praktisch` und `super` treten weit überdurchschnittlich in positiven Reviews auf, während sich Wörter rund um den Zahlungsvorgang (`zahlung`, `bezahlen`) sowie `ubs`, `seit` und `mehr` in den negativen Reviews konzentrieren. Zu beachten ist der Anteil von 67% positiven Reviews: Erst Wörter klar oberhalb dieser Schwelle sind tatsächlich positiv assoziiert. So liegt `app` mit 50% unter der Basis und ist damit eher negativ konnotiert. Sehr häufige, Wörter wie `funktionieren` (59%) tragen dagegen kaum zur Unterscheidung bei, vermutlich durch Formulierungen wie "funktioniert gut" oder "funktioniert nicht".
+
 # Methode 1 -- Bag-of-Words & TF-IDF (Baseline, W11)
 
 ## Distinktive Begriffe je Klasse (TF-IDF)
@@ -173,65 +215,71 @@ ggplot(top_stems, aes(x = n, y = fct_reorder(stem, n))) +
 ```{r tfidf-klasse, fig.cap="Top TF-IDF Stems je Klasse", fig.height=4}
 # Hier dient die KLASSE als "Dokument", um charakteristische Wörter zu finden.
 tfidf_klasse <- tokens |>
-  count(label, stem, sort = T) |>
-  bind_tf_idf(stem, label, n) |>
+  count(label, lemma, sort = TRUE) |>
+  bind_tf_idf(lemma, label, n) |>
   group_by(label) |>
   slice_max(tf_idf, n = 8, with_ties = FALSE) |>
   ungroup()
 
 ggplot(tfidf_klasse,
-       aes(tf_idf, reorder_within(stem, tf_idf, label), fill = label)) +
+       aes(tf_idf, reorder_within(lemma, tf_idf, label), fill = label)) +
   geom_col(show.legend = FALSE) +
   facet_wrap(~ label, scales = "free_y") +
   scale_y_reordered() +
+  scale_fill_manual(values = c(positiv = "steelblue", negativ = "darkorange")) +
   labs(x = "TF-IDF", y = NULL) +
   theme_minimal()
+
 ```
 
 *Interpretation:* Was sagen die distinktiven Wörter über die Gruppen aus?
 
-# Methode 2 -- Klassifikation auf Basis von Text (Naive Bayes, W11 S.44)
+Die klassenweise TF-IDF-Analyse bestätigt die erwartete Trennung deutlich. Auf der negativen Seite dominieren konkrete Fehlerorte: `anmelden` und `melden` verweisen höchstwahrscheinlich auf Login-Probleme, `4g` auf die Netzabhängigkeit, `bildschirm` und `verschwinden` vermutlich auf eingefrorene Anzeigen bzw. fehlgeschlagene Zahlungen, begleitet von `versuch` und `unmöglich`. Die positiven Reviews heben dagegen die Bedienbarkeit und den Alltagsnutzen hervor: `unkompliziert`, `intuitiv`, `übersichtlich`, `tadellos` und `easy`. Damit zeigt sich genau das vermutete Muster: Negative Bewertungen beziehen sich auf konkrete Ausfälle, positive auf die Einfachheit der App. Anders als im reinen Häufigkeitsplot verschwindet das sehr häufige, aber label-neutrale `app`, was den Nutzen der TF-IDF-Gewichtung illustriert. Zu beachten ist, dass TF-IDF bei nur zwei Klassen vor allem klassen-exklusive Begriffe betont; einzelne davon können selten sein, weshalb die distinktiven Wörter nicht mit den wichtigsten Themen gleichzusetzen sind. Eine Prüfung der absoluten Häufigkeiten zeigt hier allerdings, dass die distinktiven negativen Begriffe substanziell auftreten (7- bis 15-mal) und damit keine zufälligen Einzelfälle sind.
+
+# Methode 2 -- Klassifikation auf Basis von Text (Naive Bayes)
 
 > **Methodisch zentral (W11, S.45):** Die Wortliste ist Teil des Trainings.
 > Wortliste und Rare-Word-Filter NUR auf den Trainingsdaten bestimmen und
 > unverändert auf die Testdaten anwenden -- sonst fliesst Testinformation ein.
 
 ```{r split}
-n   <- nrow(reviews)
-idx <- sample(seq_len(n), size = floor(0.7 * n))
-train <- reviews[idx, ]
-test  <- reviews[-idx, ]
+set.seed(123)  # Split reproduzierbar, unabhängig von vorheriger Chunk-Reihenfolge
+
+doc_ids   <- as.character(reviews$doc_id)
+train_ids <- sample(doc_ids, size = floor(0.7 * length(doc_ids)))
+test_ids  <- setdiff(doc_ids, train_ids)
 ```
+
 
 ```{r wortliste-train}
-# Wortliste NUR auf Trainingsdaten (W11, S.41): Stems mit n>1 (Demo-Schwelle)
-word_list <- train |>
-  unnest_tokens(word, text, strip_numeric = T) |>
-  filter(!word %in% de_stop) |>
-  mutate(stem = wordStem(word, language = "de")) |>
-  count(stem, sort = T) |>
-  filter(n > 1) |>
-  pull(stem)
+# Methodisch zentral (W11, S.45): Wortliste NUR aus Trainings-Dokumenten.
+min_count <- 5   # Mindesthäufigkeit im Training -> Entscheidung, s. Text
+
+word_list <- tokens |>
+  filter(doc_id %in% train_ids) |>
+  count(lemma, sort = TRUE) |>
+  filter(n >= min_count) |>
+  pull(lemma)
+
+length(word_list)   # Anzahl Features kurz prüfen
 ```
 
-```{r bow-helper}
-# Baut die BoW-Feature-Matrix für ein beliebiges Subset mit FIXER word_list.
-# Garantiert, dass alle word_list-Spalten existieren (wichtig fürs Test-Set).
-build_features <- function(df, word_list) {
-  feats <- df |>
-    select(doc_id, text) |>
-    unnest_tokens(word, text, strip_numeric = T) |>
-    filter(!word %in% de_stop) |>
-    mutate(stem = wordStem(word, language = "de")) |>
-    filter(stem %in% word_list) |>
-    count(doc_id, stem) |>
-    pivot_wider(names_from = stem, values_from = n, values_fill = 0)
 
-  miss <- setdiff(word_list, names(feats))   # im Subset nicht vorkommende Stems
+```{r bow-helper}
+# Baut die BoW-Matrix aus der bestehenden tokens-Annotation für ein doc_id-Set.
+build_features <- function(doc_ids, word_list) {
+  feats <- tokens |>
+    filter(doc_id %in% doc_ids, lemma %in% word_list) |>
+    count(doc_id, lemma) |>
+    pivot_wider(names_from = lemma, values_from = n, values_fill = 0)
+
+  miss <- setdiff(word_list, names(feats))   # im Subset nicht vorkommende Lemmas
   feats[miss] <- 0
 
-  df |>
-    select(doc_id, label) |>
+  # Label zurückholen; Dokumente ohne Feature-Wort als Null-Zeile behalten
+  reviews |>
+    transmute(doc_id = as.character(doc_id), label) |>
+    filter(doc_id %in% doc_ids) |>
     left_join(feats, by = "doc_id") |>
     mutate(across(all_of(word_list), ~ replace_na(.x, 0))) |>
     select(doc_id, label, all_of(word_list))
@@ -241,25 +289,48 @@ build_features <- function(df, word_list) {
 to_binary <- function(feat_df, word_list) {
   feat_df |>
     mutate(across(all_of(word_list),
-                  ~ factor(.x > 0, levels = c(FALSE, T),
+                  ~ factor(.x > 0, levels = c(FALSE, TRUE),
                            labels = c("no", "yes"))))
 }
 ```
 
-```{r nb-modell}
-train_bin <- to_binary(build_features(train, word_list), word_list) |> select(-doc_id)
-test_bin  <- to_binary(build_features(test,  word_list), word_list) |> select(-doc_id)
 
-nb   <- naive_bayes(label ~ ., data = train_bin, laplace = 1)
+```{r nb-modell}
+train_bin <- to_binary(build_features(train_ids, word_list), word_list) |> select(-doc_id)
+test_bin  <- to_binary(build_features(test_ids,  word_list), word_list) |> select(-doc_id)
+
+nb   <- naive_bayes(label ~ ., data = train_bin, laplace = 1)  # Laplace-Glättung
 pred <- predict(nb, newdata = test_bin |> select(-label))
 
 konfusion <- table(Vorhersage = pred, Tatsächlich = test_bin$label)
 accuracy  <- mean(pred == test_bin$label)
+
+# Kennzahlen je Klasse aus der Konfusionsmatrix (dependency-frei)
+metriken <- purrr::map_dfr(levels(test_bin$label), function(kl) {
+  tp <- konfusion[kl, kl]
+  fp <- sum(konfusion[kl, ]) - tp
+  fn <- sum(konfusion[, kl]) - tp
+  precision <- tp / (tp + fp)
+  recall    <- tp / (tp + fn)
+  tibble(Klasse = kl, Precision = precision, Recall = recall,
+         F1 = 2 * precision * recall / (precision + recall))
+})
+
+baseline <- max(prop.table(table(test_bin$label)))  # Mehrheitsklassen-Accuracy
 ```
 
+
 ```{r nb-ausgabe}
-konfusion |> kable(caption = sprintf("Konfusionsmatrix Test (Accuracy = %.2f)", accuracy))
+cat(sprintf("Accuracy:            %.2f\n", accuracy))
+cat(sprintf("Mehrheits-Baseline:  %.2f\n\n", baseline))
+
+cat("Konfusionsmatrix (Zeilen = Vorhersage, Spalten = tatsächlich):\n")
+print(konfusion)
+
+cat("\nPrecision / Recall / F1 je Klasse:\n")
+print(as.data.frame(metriken), row.names = FALSE, digits = 3)
 ```
+Naive Bayes erreicht auf den Testdaten eine Accuracy von 0.77 und übertrifft damit die Mehrheits-Baseline von 0.65 deutlich. Das Modell lernt also tatsächlich textbasierte Muster. Aufschlussreicher als die Gesamtgenauigkeit ist jedoch der Blick der jeweiligen Klassen: Während positive Reviews zuverlässig erkannt werden (Recall 0.88), liegt der Recall der negativen Klasse nur bei 0.56. Von 188 tatsächlich negativen Reviews werden 83 fälschlich als positiv eingestuft. Die Precision der negativen Klasse ist mit 0.71 hingegen brauchbar: Was das Modell als negativ markiert, ist meist auch negativ. Für die Leitfrage bedeutet das, dass sich negative Reviews zwar überzufällig am Text erkennen lassen, ein einfaches BoW-Modell aber rund die Hälfte der Beschwerden übersieht. Ursächlich sind die unausgewogene Klassenverteilung, die Kürze der Texte und die Unabhängigkeitsannahme des Verfahrens, die Negationen wie „nicht schlecht" auseinanderreisst 
 
 > Hinweis: Auf dem winzigen Demo-Datensatz sind diese Zahlen NICHT aussagekräftig.
 > Mit eurem echten Korpus (>=200 Texte) und ggf. Cross-Validation wird das robust.
