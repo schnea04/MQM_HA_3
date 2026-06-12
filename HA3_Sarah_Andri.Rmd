@@ -52,7 +52,9 @@ Deswegen können digitale Zahlungsmittel wie TWINT Fluch und Segen zugleich sein
 
 Somit ist das Potenzial für verärgerte Kundschaft nicht klein, welche dann teilweise auch ein Ventil für ihren Frust sucht. Dieses Ventil kann eine Rezension sein. Somit sind in den Rezensionen der Apps immer wieder geladene Texte der Kundschaft zu finden, bei der die App "im dümmsten Moment" nicht funktioniert. Auch wenn die App an sich grösstenteils sehr gut funktioniert und das auch in den Rezensionen zu lesen ist, sind genau solche Aussetzer wichtig zu erkennen. 
 
-Genau hier setzt unsere Analyse an. Eine einzelne Sternebewertung sagt zwar, ob jemand zufrieden war, aber nicht, warum. Wir fragen deshalb: Lassen sich aus den Texten der TWINT-Rezensionen systematisch jene Themen herauslesen, die hinter negativen Bewertungen stehen und unterscheiden sich diese sprachlich klar von den positiven? Wir erwarten erstens eine insgesamt eher positive bis polarisierte Bewertungsverteilung, wie sie für etablierte Alltags-Apps typisch ist. Zweitens vermuten wir, dass sich negative Reviews weniger auf die Idee der App sondern eher auf konkrete Ausfälle beziehen; Begriffe rund um Login, Verbindung oder Zahlungsabbrüche dürften in den schlecht bewerteten Texten überdurchschnittlich häufig auftauchen. Ob sich diese Erwartung bestätigt und ob ein einfaches, interpretierbares Modell positive von negativen Reviews allein anhand des Textes trennen kann, prüfen wir in den nächsten Minuten.
+Genau hier setzt unsere Analyse an. Eine einzelne Sternebewertung sagt zwar, ob jemand zufrieden war, aber nicht, warum. Wir fragen deshalb: Lassen sich aus den Texten der TWINT-Rezensionen systematisch jene Themen herauslesen, die hinter negativen Bewertungen stehen und unterscheiden sich diese sprachlich klar von den positiven? Wir erwarten erstens eine insgesamt eher positive bis polarisierte Bewertungsverteilung, wie sie für etablierte Alltags-Apps typisch ist.
+Frage Sarah: Was ist gemeint mit polarisierte bewertungsverteilung?
+Zweitens vermuten wir, dass sich negative Reviews weniger auf die Idee der App sondern eher auf konkrete Ausfälle beziehen; Begriffe rund um Login, Verbindung oder Zahlungsabbrüche dürften in den schlecht bewerteten Texten überdurchschnittlich häufig auftauchen. Ob sich diese Erwartung bestätigt und ob ein einfaches, interpretierbares Modell positive von negativen Reviews allein anhand des Textes trennen kann, prüfen wir in den nächsten Minuten.
 
 
 # Daten
@@ -227,7 +229,7 @@ Zu beachten ist, dass TF-IDF bei nur zwei Klassen vor allem klassen-exklusive Be
 Frage sarah: was ist da gemeint mit klassen-exklusiven Begriffen und was wären Beispiele dafür?
 
 # Klassifikation auf Basis von Text mit Naive Bayes
-Für den Naive-Bayes bracuht es einen train/test-split, damit die Evaluation auf unabhängigen Daten erfolgt. Die Wortliste für die Bag of Words-Features wird ausschließlich aus den Trainingsdaten erstellt, um keine Testinformation einfliessen zu lassen. Die muss gemacht werden, damit die Performance nicht künstlich aufgebläht wird.
+Für den Naive-Bayes braucht es einen train/test-split, damit die Evaluation auf unabhängigen Daten erfolgt. Die Wortliste für die Bag of Words-Features wird ausschließlich aus den Trainingsdaten erstellt, um keine Testinformation einfliessen zu lassen. Die muss gemacht werden, damit die Performance nicht künstlich aufgebläht wird.
 
 ```{r split}
 
@@ -255,7 +257,7 @@ word_list <- tokens |>
   filter(n >= min_count) |>
   pull(lemma)
 
-length(word_list)   # Anzahl Features kurz prüfen
+#length(word_list)   # Anzahl Features kurz prüfen
 ```
 
 
