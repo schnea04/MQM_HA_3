@@ -4,11 +4,11 @@ author: "Sarah Inderbitzin, Andri Schneider"
 date: "`r format(Sys.Date(), '%d.%m.%Y')`"
 output:
   html_document:
-    toc: true
+    toc: false
     toc_depth: '2'
     df_print: paged
   pdf_document:
-    toc: true
+    toc: false
     toc_depth: 2
     number_sections: true
     fig_caption: true
@@ -21,28 +21,27 @@ header-includes:
 ---
 
 ```{r setup, include=FALSE}
-# Code wird im Body ausgeblendet und am Ende gesammelt im Anhang gezeigt.
-# Zum Entwickeln: echo = T setzen.
+# Code wird im Body ausgeblendet und im Anhang angezeigt.
 knitr::opts_chunk$set(
   echo = FALSE, warning = FALSE, message = FALSE,
   fig.align = "center", fig.width = 6, fig.height = 3.6, fig.pos = "H",
   fig.crop = FALSE
 )
-set.seed(42)  # Reproduzierbarkeit (vgl. Train/Test, word2vec, LDA)
+set.seed(42)
 ```
 
 ```{r pakete}
-# --- Kern (läuft auf dem Demo-Datensatz durch) ---
-library(tidyverse)   # dplyr, ggplot2, stringr, tidyr
-library(tidytext)    # unnest_tokens, bind_tf_idf, cast_dtm, tidy()
-library(tokenizers)  # tokenize_words / tokenize_ngrams (im Kurs verwendet)
-library(stopwords)   # stopwords(source="snowball", language="de")
-library(SnowballC)   # wordStem(..., language="de")  -> Stemming
-library(naivebayes)  # naive_bayes()  -> Klassifikation auf BoW (Kurs-Beispiel)
+library(tidyverse)   
+library(tidytext)    
+library(tokenizers)  
+library(stopwords)   
+library(naivebayes)  
 library(knitr)
 library(dplyr)
 library(udpipe)
 library(topicmodels)
+library(rsample)
+library(gam)
 ```
 
 # Ausgangslage und Story
@@ -53,9 +52,95 @@ Deswegen können digitale Zahlungsmittel wie TWINT Fluch und Segen zugleich sein
 Somit ist das Potenzial für verärgerte Kundschaft nicht klein, welche dann teilweise auch ein Ventil für ihren Frust sucht. Dieses Ventil kann eine Rezension sein. Somit sind in den Rezensionen der Apps immer wieder geladene Texte der Kundschaft zu finden, bei der die App "im dümmsten Moment" nicht funktioniert. Auch wenn die App an sich grösstenteils sehr gut funktioniert und das auch in den Rezensionen zu lesen ist, sind genau solche Aussetzer wichtig zu erkennen. 
 
 Genau hier setzt unsere Analyse an. Eine einzelne Sternebewertung sagt zwar, ob jemand zufrieden war, aber nicht, warum. Wir fragen deshalb: Lassen sich aus den Texten der TWINT-Rezensionen systematisch jene Themen herauslesen, die hinter negativen Bewertungen stehen und unterscheiden sich diese sprachlich klar von den positiven? Wir erwarten erstens eine insgesamt eher positive bis polarisierte Bewertungsverteilung, wie sie für etablierte Alltags-Apps typisch ist.
-Frage Sarah: Was ist gemeint mit polarisierte bewertungsverteilung?
+
 Zweitens vermuten wir, dass sich negative Reviews weniger auf die Idee der App sondern eher auf konkrete Ausfälle beziehen; Begriffe rund um Login, Verbindung oder Zahlungsabbrüche dürften in den schlecht bewerteten Texten überdurchschnittlich häufig auftauchen. Ob sich diese Erwartung bestätigt und ob ein einfaches, interpretierbares Modell positive von negativen Reviews allein anhand des Textes trennen kann, prüfen wir in den nächsten Minuten.
 
+```{python scraper, eval=FALSE}
+from google_play_scraper import Sort, reviews_all
+import pandas as pd
+ 
+APP_IDS = {
+    "UBS TWINT": "com.ubs.Paymit.android",
+}
+ 
+frames = []
+for app_name, app_id in APP_IDS.items():
+    rev = reviews_all(
+        app_id,
+        lang="de",            # Antwort-Sprache
+        country="ch",         # Markt Schweiz
+        sort=Sort.NEWEST,
+        sleep_milliseconds=200,  # höflich bleiben, Server nicht hämmern
+    )
+    d = pd.DataFrame(rev)
+    d["app"] = app_name
+    frames.append(d)
+ 
+df = pd.concat(frames, ignore_index=True)
+ 
+# Nur die relevanten Spalten; Usernamen bewusst NICHT übernehmen (Datenschutz).
+df = df[["app", "content", "score", "at", "thumbsUpCount", "reviewCreatedVersion"]]
+df = df.rename(columns={"content": "text", "score": "rating", "at": "date"})
+ 
+# Aufräumen: leere/sehr kurze Reviews raus, Duplikate raus (vgl. W11, S.51).
+df = df.dropna(subset=["text"])
+df = df[df["text"].str.len() >= 20]
+df = df.drop_duplicates(subset=["text"]).reset_index(drop=True)
+df.insert(0, "doc_id", range(1, len(df) + 1))
+ 
+df.to_csv("twint_reviews.csv", index=False, encoding="utf-8")
+ 
+print(f"{len(df)} Reviews gespeichert -> twint_reviews.csv")
+print("\nRating-Verteilung:")
+print(df["rating"].value_counts().sort_index())
+```
+ 
+```{python uebersetzer, eval = F}
+import time
+import pandas as pd
+from langdetect import detect_langs, LangDetectException
+from deep_translator import GoogleTranslator
+ 
+df = pd.read_csv("twint_reviews.csv")
+ 
+ 
+def erkenne_sprache(t):
+    """Wahrscheinlichste Sprache; bei kurzen/unsicheren Texten None."""
+    if not isinstance(t, str) or len(t.strip()) < 3:
+        return None
+    try:
+        top = detect_langs(t)[0]                 # Sprache + Wahrscheinlichkeit
+        return top.lang if top.prob >= 0.90 else None
+    except LangDetectException:
+        return None
+ 
+ 
+df["lang"] = df["text"].apply(erkenne_sprache)
+ 
+uebersetzer = GoogleTranslator(source="auto", target="de")
+ 
+ 
+def nach_deutsch(row):
+    t, lang = row["text"], row["lang"]
+    if not isinstance(t, str) or lang in (None, "de"):
+        return t                                 # Deutsch oder unsicher -> Original behalten
+    try:
+        time.sleep(0.2)                          # hoeflich bleiben
+        return uebersetzer.translate(t[:4900])   # Google-Limit ~5000 Zeichen pro Call
+    except Exception:
+        return t                                 # bei Fehler Original behalten
+ 
+ 
+df["text_de"] = df.apply(nach_deutsch, axis=1)
+ 
+df.to_csv("twint_reviews_de.csv", index=False, encoding="utf-8")
+ 
+print("Erkannte Sprachen:")
+print(df["lang"].value_counts(dropna=False))
+print(f"\nUebersetzt: {(df['lang'].notna() & (df['lang'] != 'de')).sum()} Reviews")
+print("Gespeichert -> twint_reviews_de.csv")
+ 
+```
 
 # Daten
 ```{r daten-laden}
@@ -69,7 +154,6 @@ reviews <- read.csv("C:/Users/InderbitzinSarah/Repos/MQM_HA_3/twint_reviews_de.c
 reviews <- reviews |>
   mutate(label = factor(if_else(rating >= 4, "positiv", "negativ"),
                         levels = c("negativ", "positiv")))
-
 
 ```
 
@@ -98,12 +182,7 @@ Die Rating-Labels sind folgendermassen verteilt: 67 % positiv (4–5 Sterne), 33
 Es sind mehrheitlich positive Bewertungen, aber es gibt genug negatives Material (rund ein Drittel), um Muster hinter schlechten Bewertungen herauszuarbeiten.
 
 Circa 90% der Reviews wurden als Deutsch erkannt. Bei der Übersetzung wurde vom Google-Translator Englisch (31x), Französisch (3x) und Italienisch (3x) korrekt erkannt und ins deutsche übersetzt. Die restlichen erkannten Sprachen (Niederländisch, Dänisch, Französisch, Schwedisch, Norwegisch und Afrikanisch) sind bei genauerer Betrachtung falsch klassifiziert, da diese bereits im Original Deutsch waren; sie wurden trotzdem "übersetzt". Zudem konnten einige Texte nicht erkannt werden (NaN). Diese waren entweder Hochdeutsch mit Schreibfehlern oder verhältnismässig vielen englischen Begriffen oder auf Schweizerdeutsch verfasst.
---> hier zeigen der beispiele in r data explorer
 
-```{r Daten mit anderen Sprachen}
-#print(reviews[as.character(reviews$lang) != "de",c("lang", "text")])
-
-```
 
 Folgend werden nur noch die originalen oder auf Deutsch übersetzten Texte verwendet. Aufgrund der geringen Anzahl der Schweizerdeutschen Texte werden diese nicht als entscheidend betrachtet und deswegen nicht noch separat übersetzt.
 
@@ -113,15 +192,13 @@ Folgend werden nur noch die originalen oder auf Deutsch übersetzten Texte verwe
 ```{r daten-selektion}
 #Umbenennung und Selektion
 reviews <- reviews |> select(doc_id, text = text_de, rating, label, date)
-head(reviews)
 
 ```
 
-```{r tokenisierung, cache=TRUE}
-de_stop <- stopwords(source = "snowball", language = "de")
-# snowball genommen da es gut für Basismodelle ist
+```{r tokenisierung, cache=TRUE, echo = T}
+de_stop <- c("app", "twint", "ubs", stopwords(source = "snowball", language = "de"))
 
-# --- udpipe-Modell laden (einmalig herunterladen) ------------------------
+# --- udpipe-Modell laden------------------------
 # Der Download legt eine .udpipe-Datei im Projektordner ab. Danach wird nur
 # noch geladen -> beim Knitten nicht jedes Mal neu herunterladen.
 ud_files <- list.files(pattern = "german-gsd.*\\.udpipe$")
@@ -144,9 +221,6 @@ anno <- udpipe_annotate(
 # --- Tokens aufbereiten ---------------------------------------------------
 tokens <- anno |>
   filter(!upos %in% c("PUNCT", "SYM", "NUM", "X")) |>     # Satzzeichen/Zahlen/Symbole raus
-  # Optional (einkommentieren): nur Inhaltswörter behalten ->
-  # lesbarere TF-IDF-Begriffe und Topics:
-  # filter(upos %in% c("NOUN", "PROPN", "VERB", "ADJ", "ADV")) |>
   mutate(
     word  = str_to_lower(token),
     lemma = str_to_lower(coalesce(lemma, token))          # wenn kein Lemma vorhanden ist, nimmt es den Token selbst
@@ -162,16 +236,16 @@ tokens <- anno |>
 
 Wir normalisieren die Tokens mit Lemmatisierung statt Stemming, da die deutsche Sprache bekannterweise komplex ist. Der Snowball-Stemmer schneidet Endungen rein regelbasiert ab und scheitert an unregelmässigen Verben wie zum Beispiel gehen wo ging und gegangen nicht korrekt gefunden werden würden. Zudem scheitert Stemming an Umlautwechseln, und es erzeugt häufig keien echten Worte, die nicht zu verstehen sind. Da unsere Analyse explizit interpretierbar sein soll und die distinktiven Begriffe aus TF-IDF wie auch die späteren Topics lesbar bleiben müssen, führen wir die Wörter mit `udpipe` und dem Modell `german-gsd` auf ihre echte Grundform zurück. `udpipe` übernimmt dabei Tokenisierung, Wortarterkennung (POS) und Lemmatisierung in einem Schritt, weshalb die separate Tokenisierung über `unnest_tokens` entfällt.
 
-Satzzeichen, Symbole und Zahlen entfernen wir über die Wortart (`upos`) statt über eine Zeichenregel; das ist präziser als `strip_numeric`. Zahlen tragen in App-Reviews kaum inhaltliche Bedeutung (Sternangaben, Datums- und Versionsnummern) und fallen deshalb weg. Die Stoppwörter entfernen wir bewusst auf der Lemma-Ebene mit der Snowball-Liste für Deutsch: Da flektierte Funktionswörter wie "ist", "war" oder "sind" alle auf das Lemma "sein" zurückgeführt werden, greift die Liste auf der Grundform zuverlässiger als auf der Oberflächenform. Dies ist ein konkreter Vorteil der Lemmatisierung. Findet `udpipe` für ein Token kein Lemma (etwa bei Tippfehlern, englischen Begriffen oder Schweizerdeutsch), behalten wir die Oberflächenform, damit kein Token verloren geht.
+Satzzeichen, Symbole und Zahlen entfernen wir über die Wortart (`upos`) statt über eine Zeichenregel; das ist präziser als `strip_numeric`. Zahlen tragen in App-Reviews kaum inhaltliche Bedeutung (Sternangaben, Datums- und Versionsnummern) und fallen deshalb weg. Die Stoppwörter entfernen wir bewusst auf der Lemma-Ebene mit der Snowball-Liste für Deutsch: Da flektierte Funktionswörter wie "ist", "war" oder "sind" alle auf das Lemma "sein" zurückgeführt werden, greift die Liste auf der Grundform zuverlässiger als auf der Oberflächenform. Dies ist ein konkreter Vorteil der Lemmatisierung. Zusätzlich ergänzen wir domänenspezifische Stopwörter wie `app`, `twint` und `ubs`, damit sehr häufige Marken-/Produktbegriffe die inhaltliche Trennung der Klassen nicht dominieren. Findet `udpipe` für ein Token kein Lemma (etwa bei Tippfehlern, englischen Begriffen oder Schweizerdeutsch), behalten wir die Oberflächenform, damit kein Token verloren geht.
 
-Produktnamen wie TWINT, UBS oder App behalten wir bewusst, da sie für die Domäne zentral sind und in der Leitfrage eine Rolle spielen. Eine Filterung seltener Wörter nehmen wir an dieser Stelle nicht global vor: Sie erfolgt erst beim Aufbau der Feature-Matrix und ausschliesslich auf den Trainingsdaten, damit keine Testinformation einfliesst.
+Eine Filterung seltener Wörter nehmen wir an dieser Stelle nicht global vor: Sie erfolgt erst beim Aufbau der Feature-Matrix und ausschliesslich auf den Trainingsdaten, damit keine Testinformation einfliesst.
 
 
 # Explorative Analyse
 
 ## Worthäufigkeiten
 
-```{r häufigkeiten, fig.cap="Häufigste Stems im Korpus"}
+```{r häufigkeiten, fig.cap="Häufigste Stems im Korpus", echo = T}
 # Top 15 Lemmas nach GESAMThäufigkeit bestimmen
 top_n_lemma <- tokens |>
   count(lemma, sort = TRUE) |>
@@ -196,15 +270,12 @@ ggplot(top_lemma, aes(x = n, y = fct_reorder(lemma, n, .fun = sum), fill = label
   theme_minimal()
 ```
 
-Die häufigsten Lemmas bestätigen die erwartete Trennung bereits explorativ. Bedienbarkeitsbegriffe wie `einfach`, `super`, `schnell` und `praktisch` treten weit überdurchschnittlich in positiven Reviews auf, während sich Wörter rund um den Zahlungsvorgang (`zahlung`, `bezahlen`) sowie `ubs`, `seit` und `mehr` in den negativen Reviews konzentrieren.Zu beachten ist der Anteil von 67% positiven Reviews: Erst Wörter klar oberhalb dieser Schwelle sind tatsächlich positiv assoziiert. So liegt `app` mit 50% unter der Basis und ist damit eher negativ konnotiert. Sehr häufige, Wörter wie `funktionieren` (59%) tragen dagegen kaum zur Unterscheidung bei, vermutlich durch Formulierungen wie "funktioniert gut" oder "funktioniert nicht".
-Frage Sarah: wieso sind nur alle mit mehr als 67% tatsächlich positiv?
+Die häufigsten Lemmas bestätigen die erwartete Trennung bereits explorativ. Bedienbarkeitsbegriffe wie `einfach`, `super`, `schnell` und `praktisch` treten weit überdurchschnittlich in positiven Reviews auf, während sich Wörter rund um den Zahlungsvorgang (`zahlung`, `bezahlen`) sowie `seit` und `mehr` in den negativen Reviews konzentrieren. Zu beachten ist der Anteil von 67% positiven Reviews: Erst Wörter klar oberhalb dieser Schwelle sind tatsächlich positiv assoziiert weil die Datenbasis 2/3 positive Reviews enthält. So liegt `geld` mit 60% unter der Basis und ist damit eher negativ konnotiert. Sehr häufige, Wörter wie `funktionieren` (59%) tragen dagegen kaum zur Unterscheidung bei, vermutlich durch Formulierungen wie "funktioniert gut" oder "funktioniert nicht".
 
 # TF-IDF
 
-## Distinktive Begriffe
-
 ```{r tfidf-klasse, fig.cap="Top TF-IDF Stems je Klasse", fig.height=4}
-# Hier dient die KLASSE als "Dokument", um charakteristische Wörter zu finden.
+
 tfidf_klasse <- tokens |>
   count(label, lemma, sort = TRUE) |>
   bind_tf_idf(lemma, label, n) |>
@@ -223,41 +294,28 @@ ggplot(tfidf_klasse,
 
 ```
 
-Die klassenweise TF-IDF-Analyse bestätigt die erwartete Trennung deutlich. Auf der negativen Seite dominieren konkrete Fehlerorte: `anmelden` und `melden` verweisen höchstwahrscheinlich auf Login-Probleme, `4g` auf die Netzabhängigkeit, `bildschirm` und `verschwinden` vermutlich auf eingefrorene Anzeigen bzw. fehlgeschlagene Zahlungen, begleitet von `versuch` und `unmöglich`. Die positiven Reviews heben dagegen die Bedienbarkeit und den Alltagsnutzen hervor: `unkompliziert`, `intuitiv`, `übersichtlich`, `tadellos` und `easy`. Damit zeigt sich genau das vermutete Muster: Negative Bewertungen beziehen sich auf konkrete Ausfälle, positive auf die Einfachheit der App. Anders als im reinen Häufigkeitsplot verschwindet das sehr häufige, aber label-neutrale `app`, was den Nutzen der TF-IDF-Gewichtung illustriert.
-
-Zu beachten ist, dass TF-IDF bei nur zwei Klassen vor allem klassen-exklusive Begriffe betont; einzelne davon können selten sein, weshalb die distinktiven Wörter nicht mit den wichtigsten Themen gleichzusetzen sind. Eine Prüfung der absoluten Häufigkeiten zeigt hier allerdings, dass die distinktiven negativen Begriffe substanziell auftreten (7- bis 15-mal) und damit keine zufälligen Einzelfälle sind.
-Frage sarah: was ist da gemeint mit klassen-exklusiven Begriffen und was wären Beispiele dafür?
+Die klassenweise TF-IDF-Analyse bestätigt die erwartete Trennung deutlich. Auf der negativen Seite dominieren konkrete Fehlerorte: `anmelden` und `melden` verweisen höchstwahrscheinlich auf Login-Probleme, `4g` auf die Netzabhängigkeit, `bildschirm` und `verschwinden` vermutlich auf eingefrorene Anzeigen bzw. fehlgeschlagene Zahlungen, begleitet von `versuch` und `unmöglich`. Die positiven Reviews heben dagegen die Bedienbarkeit und den Alltagsnutzen hervor: `unkompliziert`, `intuitiv`, `übersichtlich`, `tadellos` und `easy`. Damit zeigt sich genau das vermutete Muster: Negative Bewertungen beziehen sich auf konkrete Ausfälle, positive auf die Einfachheit der App. Zudem ist erkennbar, dass allgemeine Wörter wie `funktionieren` mit der TF-IDF Methode nicht mehr angezeigt werden. 
 
 # Klassifikation auf Basis von Text mit Naive Bayes
 Für den Naive-Bayes braucht es einen train/test-split, damit die Evaluation auf unabhängigen Daten erfolgt. Die Wortliste für die Bag of Words-Features wird ausschließlich aus den Trainingsdaten erstellt, um keine Testinformation einfliessen zu lassen. Die muss gemacht werden, damit die Performance nicht künstlich aufgebläht wird.
 
-```{r split}
-
-library(rsample)
-library(gam)
-set.seed(123)
-
+```{r split, echo = T}
 doc_ids   <- as.character(reviews$doc_id)
 intrain <- initial_split(reviews, prop=0.8, strata=label)  # stratifizierte Aufteilung, damit die Klassenverteilung im Train/Test ähnlich ist
 train_ids <- training(intrain)
 test_ids <- testing(intrain)
-
-train_ids_old <- sample(doc_ids, size = floor(0.7 * length(doc_ids)))
-test_ids_old  <- setdiff(doc_ids, train_ids)
 ```
 
 
-```{r wortliste-train}
+```{r wortliste-train, include = T}
 # Wortliste NUR aus Trainings-Dokumenten.
-min_count <- 5   # Mindesthäufigkeit im Training -> Entscheidung, siehe Text
+min_count <- 5   # Mindesthäufigkeit im Training
 
 word_list <- tokens |>
   filter(doc_id %in% train_ids$doc_id) |>
   count(lemma, sort = TRUE) |>
   filter(n >= min_count) |>
   pull(lemma)
-
-#length(word_list)   # Anzahl Features kurz prüfen
 ```
 
 
@@ -281,7 +339,7 @@ build_features <- function(doc_ids, word_list) {
     select(doc_id, label, all_of(word_list))
 }
 
-# Für Naive Bayes: nur ob ein Wort vorkommt (binär, W11 S.44)
+# Für Naive Bayes: nur ob ein Wort vorkommt
 to_binary <- function(feat_df, word_list) {
   feat_df |>
     mutate(across(all_of(word_list),
@@ -291,7 +349,7 @@ to_binary <- function(feat_df, word_list) {
 ```
 
 
-```{r nb-modell}
+```{r nb-modell, echo =T}
 train_bin <- to_binary(build_features(train_ids$doc_id, word_list), word_list) |> select(-doc_id)
 test_bin  <- to_binary(build_features(test_ids$doc_id,  word_list), word_list) |> select(-doc_id)
 
@@ -326,54 +384,12 @@ print(konfusion)
 cat("\nPrecision / Recall / F1 je Klasse:\n")
 print(as.data.frame(metriken), row.names = FALSE, digits = 3)
 ```
-Naive Bayes erreicht auf den Testdaten eine Accuracy von 0.76 und übertrifft damit die Mehrheits-Baseline von 0.66. Die Mehrheitsbaseline ist berchnet, wenn man für alle Beobachtungen einfach "positiv" sagt, wie hoch wäre dann die Accuarcy. Das Modell lernt also tatsächlich textbasierte Muster und stuft nicht random ein.
-Aufschlussreicher als die Gesamtgenauigkeit ist jedoch der Blick der jeweiligen Klassen: Während positive Reviews zuverlässig erkannt werden (Recall 0.88), liegt der Recall der negativen Klasse nur bei 0.5. Von 120 tatsächlich negativen Reviews werden 59 fälschlich als positiv eingestuft. Die Precision der negativen Klasse ist mit 0.69 hingegen brauchbar: Was das Modell als negativ markiert, ist meist auch negativ. Für die Leitfrage bedeutet das, dass sich negative Reviews zwar überzufällig am Text erkennen lassen, ein einfaches BoW-Modell aber rund die Hälfte der Beschwerden übersieht. gründe dafür könnten sein die unausgeglichene Klassenverteilung, die Kürze der Texte und die Unabhängigkeitsannahme des Verfahrens, die Negationen wie „nicht schlecht" auseinanderreisst.
-
-
-```{r sentiment-lexikon}
-# SentiWS einlesen (https://wortschatz.uni-leipzig.de/de/download/SentiWS) -> ERSETZEN.
-# Format je Zeile: "Wort|POS \t value \t flexionen"
-# senti_lex <- read_delim(c("SentiWS_v2.0_Positive.txt","SentiWS_v2.0_Negative.txt"),
-#                         delim="\t", col_names=c("wort_pos","value","flex")) |>
-#   mutate(word = str_to_lower(str_remove(wort_pos, "\\|.*"))) |>
-#   select(word, value)
-
-# --- Mini-Seed-Lexikon (PLATZHALTER, damit die Vorlage läuft) ---
-senti_lex <- tibble(
-  word = c("hervorragend","freundlich","tolle","leckere","empfehlenswert","gut","gerne",
-           "gemütlich","zuvorkommend","fantastisch","traum","frische","kreative","top",
-           "super","freundliches","aufmerksamer","ausgezeichnete","solides",
-           "enttäuschend","teuer","mangelhaft","kalt","unfreundliches","klein","hohen",
-           "katastrophaler","überteuert","fade","laut","lauwarm","schlechte","schlecht","lang"),
-  value = c(rep(1, 19), rep(-1, 15))
-)
-
-sentiment_scores <- reviews |>
-  select(doc_id, label, rating, text) |>
-  unnest_tokens(word, text) |>
-  inner_join(senti_lex, by = "word") |>
-  summarise(sentiment = sum(value), .by = c(doc_id, label, rating))
-```
-
-
-# Kritische Diskussion
-
-
-- **Grenzen BoW/TF-IDF (W12, S.5):** ignorieren Wortreihenfolge, Kontext,
-  Mehrdeutigkeit, semantische Ähnlichkeit ("nicht schlecht" vs. "schlecht").
-- **Sentiment-Wortlisten (W12, S.22):** Negation, Ironie, kontextabhängige
-  Wörter, domänenspezifische Begriffe; Liste ist nie neutral.
-- **Preprocessing (W11, S.38):** Stemming kann Bedeutung verzerren; seltene
-  Wörter können Rauschen oder wichtige Hinweise sein.
-- **Daten & Bias (W11, S.25):** Korpus-Verzerrung, Selektionsbias bei Reviews,
-  Rechtschreibfehler (W11, S.51), Sprache/Übersetzung (W12, S.26).
-- **Methodische Sauberkeit (W11, S.45):** Wortliste nur auf Trainingsdaten.
-
+Naive Bayes erreicht auf den Testdaten eine Accuracy von 0.82 und übertrifft damit die Mehrheits-Baseline von 0.66. Die Mehrheitsbaseline wird folgendermassen berechnet: Wenn man für alle Beobachtungen einfach "positiv" sagt, wie hoch ist dann die Accuarcy. Das Modell lernt also tatsächlich textbasierte Muster und stuft nicht random ein.
+Aufschlussreicher als die Gesamtgenauigkeit ist jedoch der Blick der jeweiligen Klassen: Während positive Reviews zuverlässig erkannt werden (Recall 0.88), liegt der Recall der negativen Klasse nur bei 0.69. Von 120 tatsächlich negativen Reviews werden 37 fälschlich als positiv eingestuft. Die Precision der negativen Klasse ist mit 0.69 hingegen brauchbar: Was das Modell als negativ markiert, ist meist auch negativ. Für die Leitfrage bedeutet das, dass sich negative Reviews zwar überzufällig am Text erkennen lassen, ein einfaches BoW-Modell aber rund die Hälfte der Beschwerden übersieht. Gründe dafür könnten sein die unausgeglichene Klassenverteilung, die Kürze der Texte und die Unabhängigkeitsannahme des Verfahrens, die Negationen wie „nicht schlecht" auseinanderreisst.
 
 # Fazit
 
-Kurzer Schluss (3--5 Sätze): Antwort auf die Leitfrage + was ihr mit mehr
-Zeit/Daten anders machen würdet.
+Die Analyse zeigt, dass sich positive und negative TWINT-Reviews sprachlich klar unterscheiden lassen: Negative Bewertungen kreisen um konkrete Ausfälle wie Login-Probleme oder Verbindungsfehler, positive betonen Einfachheit und Alltagsnutzen. Das Naive-Bayes-Modell bestätigt dies mit einer Accuracy von 0.82, weit über der Mehrheits-Baseline von 0.66.
 
 \newpage
 
